@@ -1,12 +1,12 @@
 <?php
 
-namespace CoffeeCode\Router;
+namespace Calcagno\Router;
 
 /**
- * Class CoffeeCode Dispatch
+ * Class Calcagno Dispatch
  *
  * @author Robson V. Leite <https://github.com/robsonvleite>
- * @package CoffeeCode\Router
+ * @package Calcagno\Router
  */
 abstract class Dispatch
 {

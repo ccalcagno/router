@@ -1,10 +1,10 @@
 <?php
 
-namespace CoffeeCode\Router;
+namespace Calcagno\Router;
 
 /**
  * Trait RouterTrait
- * @package CoffeeCode\Router
+ * @package Calcagno\Router
  */
 trait RouterTrait
 {
