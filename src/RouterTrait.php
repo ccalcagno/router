@@ -30,10 +30,10 @@ trait RouterTrait
   protected function addRoute(
     string $method,
     string $route,
-    callable|string $handler,
+    callable|string|array $handler,
     ?string $name = null,
     null|array|string $middleware = null
-  ): void {
+  ): Route {
     $route = rtrim($route, "/");
 
     $removeGroupFromPath = $this->group ? str_replace($this->group, "", $this->path) : $this->path;
@@ -67,6 +67,19 @@ trait RouterTrait
 
     $route = preg_replace('~{([^}]*)}~', "([^/]+)", $route);
     $this->routes[$method][$route] = $router();
+
+    return new Route($route, $method, $handler);
+  }
+
+  private function resolvePath(string $path): string
+  {
+    $path = trim($path, '/');
+
+    if ($path === '') {
+      return $path;
+    }
+
+    return "/{$path}";
   }
 
   /**
@@ -107,36 +120,36 @@ trait RouterTrait
    */
   private function execute(): bool
   {
-    if ($this->route) {
-      if (!$this->middleware()) {
-        return false;
-      }
+    if ($this->route === null) {
+      $this->error = self::NOT_FOUND;
+      return false;
+    }
 
-      if (is_callable($this->route['handler'])) {
-        call_user_func($this->route['handler'], ($this->route['data'] ?? []), $this);
-        return true;
-      }
 
-      $controller = $this->route['handler'];
-      $method = $this->route['action'];
+    if (!$this->middleware()) {
+      return false;
+    }
 
-      if (class_exists($controller)) {
-        $newController = new $controller($this);
-        if (method_exists($controller, $method)) {
-          $newController->$method(($this->route['data'] ?? []));
-          return true;
-        }
+    if (is_callable($this->route['handler'])) {
+      call_user_func($this->route['handler'], ($this->route['data'] ?? []), $this);
+      return true;
+    }
 
-        $this->error = self::METHOD_NOT_ALLOWED;
-        return false;
-      }
+    $controller = $this->route['handler'];
+    $method = $this->route['action'];
 
+    if (!class_exists($controller)) {
       $this->error = self::BAD_REQUEST;
       return false;
     }
 
-    $this->error = self::NOT_FOUND;
-    return false;
+    if (!method_exists($controller, $method)) {
+      $this->error = self::METHOD_NOT_ALLOWED;
+      return false;
+    }
+
+    call_user_func([new $controller($this), $method], $this->route['data'] ?? []);
+    return true;
   }
 
   /**
@@ -177,18 +190,38 @@ trait RouterTrait
    * @param string|null $namespace
    * @return callable|string
    */
-  private function handler(callable|string $handler, ?string $namespace): callable|string
+  private function handler(callable|string|array $handler, ?string $namespace): callable|string
   {
-    return (!is_string($handler) ? $handler : "{$namespace}\\" . explode($this->separator, $handler)[0]);
+    if (is_callable($handler)) {
+      return $handler;
+    }
+
+    if (is_array($handler) && count($handler) === 2) {
+      return $handler[0];
+    }
+
+    if (is_string($handler)) {
+      return "{$namespace}\\" . explode($this->separator, $handler)[0];
+    }
+
+    return $handler;
   }
 
   /**
    * @param callable|string $handler
    * @return string|null
    */
-  private function action(callable|string $handler): ?string
+  private function action(callable|string|array $handler): ?string
   {
-    return (!is_string($handler) ?: (explode($this->separator, $handler)[1] ?? null));
+    if (is_array($handler) && count($handler) === 2) {
+      return $handler[1];
+    }
+
+    if (is_string($handler)) {
+      return explode($this->separator, $handler)[1] ?? null;
+    }
+
+    return null;
   }
 
   /**

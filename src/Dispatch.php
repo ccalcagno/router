@@ -25,7 +25,7 @@ abstract class Dispatch
   protected ?array $route = null;
 
   /** @var array */
-  protected array $routes;
+  protected array $routes = [];
 
   /** @var string */
   protected string $separator;

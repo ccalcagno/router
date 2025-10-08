@@ -2,6 +2,8 @@
 
 namespace Calcagno\Router;
 
+use InvalidArgumentException;
+
 /**
  * Class Calcagno Router
  *
@@ -18,11 +20,11 @@ final class Router extends Dispatch
    */
   public function get(
     string $route,
-    callable|string $handler,
+    callable|string|array $handler,
     ?string $name = null,
     null|array|string $middleware = null
-  ): void {
-    $this->addRoute("GET", $route, $handler, $name, $middleware);
+  ): Route {
+    return $this->addRoute("GET", $route, $handler, $name, $middleware);
   }
 
   /**
@@ -33,11 +35,11 @@ final class Router extends Dispatch
    */
   public function post(
     string $route,
-    callable|string $handler,
+    callable|string|array $handler,
     ?string $name = null,
     null|array|string $middleware = null
-  ): void {
-    $this->addRoute("POST", $route, $handler, $name, $middleware);
+  ): Route {
+    return $this->addRoute("POST", $route, $handler, $name, $middleware);
   }
 
   /**
@@ -48,11 +50,11 @@ final class Router extends Dispatch
    */
   public function put(
     string $route,
-    callable|string $handler,
+    callable|string|array $handler,
     ?string $name = null,
     null|array|string $middleware = null
-  ): void {
-    $this->addRoute("PUT", $route, $handler, $name, $middleware);
+  ): Route {
+    return $this->addRoute("PUT", $route, $handler, $name, $middleware);
   }
 
   /**
@@ -63,11 +65,11 @@ final class Router extends Dispatch
    */
   public function patch(
     string $route,
-    callable|string $handler,
+    callable|string|array $handler,
     ?string $name = null,
     null|array|string $middleware = null
-  ): void {
-    $this->addRoute("PATCH", $route, $handler, $name, $middleware);
+  ): Route {
+    return $this->addRoute("PATCH", $route, $handler, $name, $middleware);
   }
 
   /**
@@ -78,10 +80,26 @@ final class Router extends Dispatch
    */
   public function delete(
     string $route,
-    callable|string $handler,
+    callable|string|array $handler,
     ?string $name = null,
     null|array|string $middleware = null
-  ): void {
-    $this->addRoute("DELETE", $route, $handler, $name, $middleware);
+  ): Route {
+    return $this->addRoute("DELETE", $route, $handler, $name, $middleware);
+  }
+
+  public function resource(string $name, string $controller)
+  {
+    if (!class_exists($controller)) {
+      throw new InvalidArgumentException("Class {$controller} not found!");
+    }
+
+    $this->get("/$name",              [$controller, 'index']);
+    $this->get("/$name/create",       [$controller, 'create']);
+    $this->post("/$name",             [$controller, 'store']);
+    $this->get("/$name/{id}",         [$controller, 'show']);
+    $this->get("/$name/{id}/edit",    [$controller, 'edit']);
+    $this->put("/$name/{id}",         [$controller, 'update']);
+    $this->patch("/$name/{id}",       [$controller, 'update']);
+    $this->delete("/$name/{id}",      [$controller, 'destroy']);
   }
 }
