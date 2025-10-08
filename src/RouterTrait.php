@@ -125,7 +125,6 @@ trait RouterTrait
       return false;
     }
 
-
     if (!$this->middleware()) {
       return false;
     }
