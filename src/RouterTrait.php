@@ -2,6 +2,9 @@
 
 namespace Calcagno\Router;
 
+use InvalidArgumentException;
+use Throwable;
+
 /**
  * Trait RouterTrait
  * @package Calcagno\Router
@@ -20,6 +23,12 @@ trait RouterTrait
   /** @const int Not Implemented */
   public const NOT_IMPLEMENTED = 501;
 
+  /** @const int Internal Server Error */
+  public const INTERNAL_SERVER_ERROR = 500;
+
+  /** @const int Forbiden */
+  public const FORBIDDEN = 403;
+
   /**
    * @param string $method
    * @param string $route
@@ -35,21 +44,8 @@ trait RouterTrait
     null|array|string $middleware = null
   ): Route {
     $route = rtrim($route, "/");
-
-    $removeGroupFromPath = $this->group ? str_replace($this->group, "", $this->path) : $this->path;
-    $pathAssoc = trim($removeGroupFromPath, "/");
-    $routeAssoc = trim($route, "/");
-
-    preg_match_all("~\{\s* ([a-zA-Z_][a-zA-Z0-9_-]*) \}~x", $routeAssoc, $keys, PREG_SET_ORDER);
-    $routeDiff = array_values(array_diff_assoc(explode("/", $pathAssoc), explode("/", $routeAssoc)));
-
-    $this->formSpoofing();
-    $offset = 0;
-    foreach ($keys as $key) {
-      $this->data[$key[1]] = ($routeDiff[$offset++] ?? null);
-    }
-
     $route = (!$this->group ? $route : "/{$this->group}{$route}");
+
     $data = $this->data;
     $namespace = $this->namespace;
     $middleware = $middleware ?? (!empty($this->middleware[$this->group]) ? $this->middleware[$this->group] : null);
@@ -83,72 +79,154 @@ trait RouterTrait
   }
 
   /**
-   * httpMethod form spoofing
-   */
-  protected function formSpoofing(): void
-  {
-    $post = filter_input_array(INPUT_POST, FILTER_DEFAULT);
-
-    if (!empty($post['_method']) && in_array($post['_method'], ["PUT", "PATCH", "DELETE"])) {
-      $this->httpMethod = $post['_method'];
-      $this->data = $post;
-
-      unset($this->data["_method"]);
-      return;
-    }
-
-    if ($this->httpMethod == "POST") {
-      $this->data = filter_input_array(INPUT_POST, FILTER_DEFAULT);
-
-      unset($this->data["_method"]);
-      return;
-    }
-
-    if (in_array($this->httpMethod, ["PUT", "PATCH", "DELETE"]) && !empty($_SERVER['CONTENT_LENGTH'])) {
-      parse_str(file_get_contents('php://input', false, null, 0, $_SERVER['CONTENT_LENGTH']), $putPatch);
-      $this->data = $putPatch;
-
-      unset($this->data["_method"]);
-      return;
-    }
-
-    $this->data = [];
-  }
-
-  /**
    * @return bool
    */
   private function execute(): bool
   {
-    if ($this->route === null) {
-      $this->error = self::NOT_FOUND;
-      return false;
-    }
+    try {
+      if ($this->route === null) {
+        throw new HttpException('Rota não encontrada.', self::NOT_FOUND);
+      }
 
-    if (!$this->middleware()) {
-      return false;
-    }
+      if (!$this->middleware()) {
+        throw new HttpException('Middleware bloqueou a execução.', self::FORBIDDEN);
+      }
 
-    if (is_callable($this->route['handler'])) {
-      call_user_func($this->route['handler'], ($this->route['data'] ?? []), $this);
+      if (is_callable($this->route['handler'])) {
+        call_user_func($this->route['handler'], ($this->route['data'] ?? []), $this);
+        return true;
+      }
+
+      $controller = $this->route['handler'];
+      $method = $this->route['action'];
+
+      if (!class_exists($controller)) {
+        throw new HttpException("Controller {$controller} não encontrado.", self::BAD_REQUEST);
+      }
+
+      if (!method_exists($controller, $method)) {
+        throw new HttpException("Método {$method} não permitido em {$controller}.", self::METHOD_NOT_ALLOWED);
+      }
+
+      $instance = new $controller($this);
+      $params = $this->getParams($instance, $method);
+
+      call_user_func_array([$instance, $method], $params);
       return true;
-    }
-
-    $controller = $this->route['handler'];
-    $method = $this->route['action'];
-
-    if (!class_exists($controller)) {
+    } catch (HttpException $e) {
+      $this->error = $e->getStatusCode();
+    } catch (InvalidArgumentException) {
       $this->error = self::BAD_REQUEST;
-      return false;
+    } catch (Throwable) {
+      $this->error = self::INTERNAL_SERVER_ERROR;
     }
 
-    if (!method_exists($controller, $method)) {
-      $this->error = self::METHOD_NOT_ALLOWED;
-      return false;
+    return false;
+  }
+
+  private function getParams(object $instance, string $method): array
+  {
+    $pathParams = $this->getPathParams();
+    $queryParams = $this->getQueryParams();
+    $bodyParams = $this->getBodyParams();
+
+    $reflection = new \ReflectionMethod($instance, $method);
+    $args = [];
+
+    foreach ($reflection->getParameters() as $param) {
+      $name = $param->getName();
+      $type = $param->getType();
+
+      if ($name === 'input') {
+        $args[] = $bodyParams;
+        continue;
+      }
+
+      if (array_key_exists($name, $pathParams)) {
+        $args[] = $this->castValue($pathParams[$name], $type);
+        continue;
+      }
+
+      if (array_key_exists($name, $queryParams)) {
+        $args[] = $this->castValue($queryParams[$name], $type);
+        continue;
+      }
+
+      if ($param->isDefaultValueAvailable()) {
+        $args[] = $param->getDefaultValue();
+        continue;
+      }
+
+      throw new \InvalidArgumentException("Missing required parameter '{$name}' for {$reflection->getDeclaringClass()->getName()}::{$method}()");
     }
 
-    call_user_func([new $controller($this), $method], $this->route['data'] ?? []);
-    return true;
+    return $args;
+  }
+
+  private function castValue(mixed $value, ?\ReflectionType $type): mixed
+  {
+    if (!$type instanceof \ReflectionNamedType || $type->isBuiltin() === false) {
+      return $value;
+    }
+
+    $typeName = $type->getName();
+
+    if ($value === null) {
+      return null;
+    }
+
+    return match ($typeName) {
+      'int'    => (int) $value,
+      'float'  => (float) $value,
+      'bool'   => filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? false,
+      'string' => (string) $value,
+      'array'  => (array) $value,
+      default  => $value,
+    };
+  }
+
+  private function getPathParams(): array
+  {
+    $removeGroupFromPath = $this->group ? str_replace($this->group, "", $this->request->path()) : $this->request->path();
+    $pathAssoc = trim($removeGroupFromPath, "/");
+    $routeAssoc = trim($this->route['route'], "/");
+
+    preg_match_all("~\{\s* ([a-zA-Z_][a-zA-Z0-9_-]*) \}~x", $routeAssoc, $keys, PREG_SET_ORDER);
+    $routeDiff = array_values(array_diff_assoc(explode("/", $pathAssoc), explode("/", $routeAssoc)));
+
+    $pathParams = [];
+    $offset = 0;
+    foreach ($keys as $key) {
+      $pathParams[$key[1]] = ($routeDiff[$offset++] ?? null);
+    }
+
+    return $pathParams;
+  }
+
+  private function getQueryParams(): array
+  {
+    $queryParams = filter_input_array(INPUT_GET, FILTER_DEFAULT);
+    unset($queryParams['route']);
+
+    return $queryParams;
+  }
+
+  private function getBodyParams(): array
+  {
+    $post = filter_input_array(INPUT_POST, FILTER_DEFAULT);
+    $bodyParams = [];
+
+    if ((!empty($post['_method']) && in_array($post['_method'], ["PUT", "PATCH", "DELETE"])) || $this->request->method() == "POST") {
+      unset($post['_method']);
+      $bodyParams = $post;
+    } elseif (in_array($this->request->method(), ["PUT", "PATCH", "DELETE"]) && !empty($_SERVER['CONTENT_LENGTH'])) {
+      parse_str(file_get_contents('php://input', false, null, 0, $_SERVER['CONTENT_LENGTH']), $input);
+      unset($input['_method']);
+
+      $bodyParams = $input;
+    }
+
+    return $bodyParams;
   }
 
   /**
